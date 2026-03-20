@@ -1,141 +1,240 @@
-<!-- src/MainPage.vue -->
 <template>
-    <img alt="Vue logo" src="../assets/logo.png" >
-  <div class="part1" id="part1">
-    <div class="input_container" id="input_container">
-        <input class="input" v-model="usrname" type="text"  placeholder="Enter Username">
-        <input class="input" v-model="password" type="password"  placeholder="Enter password">
-    </div>
-    <div class="btn_container" id="btn_container">
-        <button class="btn" id="signup_btn" @click="SignupAction">Sign Up</button>
-        <select v-model="role">
-            <option value="Customer">Customer</option>
-            <option value="Worker">Worker</option>
-            <option value="Admin">Admin</option>
-        </select>
-        <button class="btn" id="login_btn" @click="LoginAction">Log In</button>
+  <div class="main-container">
+    <img alt="Vue logo" src="../assets/logo.png" class="logo" />
+    <div class="form-wrapper">
+      <!-- 用户名输入框 -->
+      <div class="input-group">
+        <input
+          v-model="usrname"
+          type="text"
+          placeholder="Enter Username"
+          class="input"
+          @blur="checkUsername"
+        />
+        <span v-if="tip" class="tip" :style="{ color: color }">{{ tip }}</span>
+      </div>
 
+      <!-- 密码输入框 -->
+      <div class="input-group">
+        <input
+          v-model="password"
+          type="password"
+          placeholder="Enter Password"
+          class="input"
+        />
+      </div>
+
+      <!-- 角色选择 + 按钮组 -->
+      <div class="btn-group">
+        <button
+          class="btn signup-btn"
+          @click="SignupAction"
+          :disabled="loading"
+        >
+          {{ loading ? 'Processing...' : 'Sign Up' }}
+        </button>
+
+        <select v-model="role" class="role-select">
+          <option value="Customer">Customer</option>
+          <option value="Worker">Worker</option>
+          <option value="Admin">Admin</option>
+        </select>
+
+        <button class="btn login-btn" @click="LoginAction">Log In</button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-    import {ref} from 'vue'
-    import { useRouter } from 'vue-router' // 导入路由钩子
-    import request from '../utils/request'
-    const router = useRouter() // 创建路由实例
-    const usrname =ref("")
-    const password=ref("")
-    const role = ref("Customer")
-    
-    
-//注册事件
-    const SignupAction = () => {
-    // 1. 读取本地用户列表
-    const usersList = JSON.parse(localStorage.getItem('users')) || []
-    
-    // 2. 遍历检查用户名是否已存在（核心：if + some 遍历）
-    const isUsernameExist = usersList.some(user => 
-        user.usrname.toLowerCase() === usrname.value.toLowerCase()
-    )
-    
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
+import axios from 'axios'
 
-    if (isUsernameExist) { // 用遍历结果做if判断
-        alert('用户名已存在！')
-        return
-    }
+// 路由实例
+const router = useRouter()
 
-    // 3. 不存在则注册
-    const newUser = { usrname: usrname.value, password: password.value, role: role.value }
-        usersList.push(newUser)
-        localStorage.setItem('users', JSON.stringify(usersList))
-        alert('注册成功！')
-        usrname.value=""
-        password.value=""
-    }
-//登录事件
+// 响应式数据
+const usrname = ref('')
+const password = ref('')
+const role = ref('Customer')
+const tip = ref('')
+const color = ref('red')
+const loading = ref(false)
 
-    const LoginAction = () => {
-        const usersList = JSON.parse(localStorage.getItem('users')) || []
+// 基础请求配置（直接用axios，避免request.js配置问题）
+const request = axios.create({
+  baseURL: 'http://localhost:8081',
+  timeout: 5000,
+  headers: { 'Content-Type': 'application/json' }
+})
 
-  // 4. 判断角色并跳转
-  const currentUser = usersList.find(user => 
-    user.usrname.toLowerCase() === usrname.value.toLowerCase()  && user.password === password.value
-  )
-  if (!currentUser) {
-    alert('用户名或密码错误！') // 输错密码的专属提示
+// 1. 用户名检测
+const checkUsername = async () => {
+  if (!usrname.value.trim()) {
+    tip.value = 'Username cannot be empty'
+    color.value = 'red'
     return
   }
-  if(currentUser){
-    alert(currentUser.role + ' 登录成功！')
-    localStorage.setItem('currentUser', JSON.stringify(currentUser))
-    router.push('/home')
-    console.log("what")
+
+  try {
+    const res = await request.get('/api/checkUsername', {
+      params: { usrname: usrname.value.trim() }
+    })
+    tip.value = res.data.msg || 'Username available'
+    color.value = 'green'
+  } catch (err) {
+    console.error('Check username failed:', err)
+    if (err.response?.status === 400) {
+      tip.value = err.response.data.msg || 'Username exists'
+      color.value = 'red'
+    } else if (err.response?.status === 404) {
+      tip.value = 'API not found, check backend'
+      color.value = 'red'
+    } else {
+      tip.value = 'Server error, try again'
+      color.value = 'red'
+    }
   }
-//   if (currentUser) { // 用户名+密码都匹配
-//     switch(currentUser.role){
-//         case 'Admin':
-//             alert(currentUser.role + ' 登录成功！')
-//             router.push('/admin')
-//             break;
-//         case 'Worker':
-//             alert(currentUser.role + ' 登录成功！')
-//             router.push('/worker')
-//             break;
-//         case 'Customer':
-//             alert(currentUser.role + ' 登录成功！')
-//             router.push('/customer')
-//             break;
-//         default:
-//             alert('用户名或密码错误！')
-//             break;
-//         }
-//     }
+}
+
+// 2. 注册逻辑
+const SignupAction = async () => {
+  const username = usrname.value.trim()
+  if (!username || !password.value) {
+    alert('Please enter username and password')
+    return
+  }
+
+  loading.value = true
+  try {
+    const res = await request.post('/api/register', {
+      usrname: username,
+      password: password.value,
+      role: role.value
+    })
+    alert(res.data.msg || 'Sign up success!')
+    // 清空输入
+    usrname.value = ''
+    password.value = ''
+    tip.value = ''
+  } catch (err) {
+    alert(err.response?.data?.msg || 'Sign up failed')
+  } finally {
+    loading.value = false
+  }
+}
+
+// 3. 登录逻辑
+const LoginAction = async () => {
+  const username = usrname.value.trim()
+  if (!username || !password.value) {
+    alert('Please enter username and password')
+    return
+  }
+
+  try {
+    const res = await request.post('/api/login', {
+      usrname: username,
+      password: password.value
+    })
+    // 保存token和用户信息
+    localStorage.setItem('token', res.data.data.token)
+    localStorage.setItem('currentUser', JSON.stringify(res.data.data.user))
+    alert('Login success!')
+    router.push('/home')
+  } catch (err) {
+    alert(err.response?.data?.msg || 'Username or password error')
+  }
 }
 </script>
 
-<style>
-* {
-  margin: 0;
-  padding: 0;
-}
-html, body {
-  width: 100%;
-  height: 100%;
-}
-.input_container{
+<style scoped>
+.main-container {
+  min-height: 100vh;
   display: flex;
-  /* 让子元素水平居中 */
   flex-direction: column;
-  justify-content: center;
-  /* 让子元素垂直居中 */
   align-items: center;
-  /* 占满整个视口高度 */
-  height: 100px;
+  justify-content: center;
+  background-color: #1a1a1a;
+  color: white;
+}
+
+.logo {
+  height: 180px;
+  margin-bottom: 40px;
+}
+
+.form-wrapper {
+  width: 400px;
+  padding: 30px;
+  border-radius: 12px;
+  background-color: #2c2c2c;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.input-group {
+  margin-bottom: 20px;
+}
+
+.input {
   width: 100%;
-  gap: 10px; /* 给两个输入框加一点间距 */
+  padding: 12px 16px;
+  border: 1px solid #444;
+  border-radius: 8px;
+  background-color: #333;
+  color: white;
+  font-size: 16px;
+  box-sizing: border-box;
 }
-/* 给输入框加一点样式，让它们更好看 */
-.input_container input {
-  padding: 8px 12px;
+
+.input::placeholder {
+  color: #999;
+}
+
+.tip {
   font-size: 14px;
+  margin-top: 8px;
+  display: block;
 }
-.input{
-  width: 77%;
-  border-radius:50px ;
+
+.btn-group {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 20px;
 }
-.btn{
-  width: 30%;
-  height: 30px;
-  border-radius: 50px;
+
+.btn {
+  flex: 1;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.2s;
 }
-.btn:hover{
-    background-color: #c1c1c1;
-    transform: scale(1.05);
+
+.signup-btn {
+  background-color: #42b983;
+  color: white;
 }
-.btn_container{
-    display: flex;
-    justify-content: center;
-    gap: 50px;
+
+.signup-btn:disabled {
+  background-color: #666;
+  cursor: not-allowed;
+}
+
+.login-btn {
+  background-color: #007acc;
+  color: white;
+}
+
+.role-select {
+  padding: 12px;
+  border-radius: 8px;
+  background-color: #333;
+  color: white;
+  border: 1px solid #444;
 }
 </style>

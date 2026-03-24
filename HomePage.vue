@@ -1,111 +1,92 @@
 <template>
-  <div v-if="route.path === '/'">
-    <div class="login-container">
-      <div class="login-card">
-        <h2>User Login</h2>
-        <div class="input-group">
-          <label>Username</label>
-          <input
-            type="text"
-            v-model="loginForm.usrname"
-            placeholder="Enter username"
-            @keyup.enter="handleLogin"
-            ref="usernameInput"
-          />
-        </div>
-        <div class="input-group">
-          <label>Password</label>
-          <input
-            type="password"
-            v-model="loginForm.password"
-            placeholder="Enter password"
-            @keyup.enter="handleLogin"
-          />
-        </div>
-        <button class="login-btn" @click="handleLogin">Log In</button>
+  <div class="layout">
+    <!-- 左侧菜单 -->
+    <div class="sidebar">
+      <h2>Menu</h2>
+      <div
+        class="menu-item"
+        :class="{ active: activeMenu === item.name }"
+        v-for="item in menuList"
+        :key="item.name"
+        @click="switchMenu(item.name)"
+      >
+        {{ item.label }}
       </div>
-    </div>
-  </div>
-  <!-- 首页模块 -->
-  <div v-else class="home-container">
-    <!-- 头部导航 -->
-    <header class="header">
-      <h1>User Management System</h1>
-      <div class="user-info">
-        <span>Welcome: {{ currentUser.usrname }} ({{ capitalize(currentUser.role) }} - 等级{{ currentUser.level }})</span>
-        <button class="logout-btn" @click="logout">Logout</button>
-      </div>
-    </header>
-    <!-- 等级≤1（Admin/Worker）的用户管理模块 -->
-    <div v-if="currentUser.level <= 1" class="admin-module">
-      <h2>{{ currentUser.level === 0 ? 'Admin' : 'Worker' }} Panel - User Management</h2>
-      <div class="user-list">
-        <div class="user-item header-row">
-          <span class="col-usrname">Username</span>
-          <span class="col-role">Role</span>
-          <span class="col-level">Level</span>
-          <span class="col-action">Action</span>
-        </div>
-        <div v-for="user in userList" :key="user.usrname" class="user-item">
-          <span class="col-usrname">{{ user.usrname }}</span>
-          <span class="col-role">{{ capitalize(user.role) }}</span>
-          <span class="col-level">{{ user.level }}</span>
-          <button
-            class="delete-btn"
-            @click="deleteUser(user.usrname)"
-            :disabled="getDeleteBtnDisabledStatus(user)"
-          >
-            {{ getDeleteBtnDisabledStatus(user) ? 'No Delete' : 'Delete' }}
-          </button>
-        </div>
-      </div>
-    </div>
-    <!-- 等级2（Customer）模块 -->
-    <div class="user-module">
-      <h2>{{ capitalize(currentUser.role) }} Dashboard</h2>
-      <div class="user-dashboard">
-        <div class="card">
-          <h3>Personal Info</h3>
-          <p>Username: {{ currentUser.usrname }}</p>
-          <p>Role: {{ capitalize(currentUser.role) }} (等级{{ currentUser.level }})</p>
-          <!-- 原修改密码按钮，绑定打开弹窗事件 -->
-          <button class="edit-btn" @click="openPwdModal">Change Password</button>
-        </div>
-        <div class="card">
-          <h3>System Info</h3>
-          <p>Login Time: {{ loginTime }}</p>
-          <p>Server Status: Online</p>
-        </div>
+
+      <!-- 只有 admin 显示 菜单管理 -->
+      <div
+        class="menu-item menu-admin"
+        :class="{ active: activeMenu === 'menuSetting' }"
+        v-if="currentUser.level === 0"
+        @click="switchMenu('menuSetting')"
+      >
+        🔧 菜单权限管理
       </div>
     </div>
 
-    <!-- 🌟 新增：修改密码弹窗 -->
-    <div class="modal-mask" v-if="pwdModalVisible" @click="closePwdModal">
-      <div class="modal-content" @click.stop>
-        <h3 class="modal-title">Change Password</h3>
-        <div class="modal-input-group">
-          <label>Old Password</label>
-          <input
-            type="password"
-            v-model="pwdForm.oldPassword"
-            placeholder="Enter your old password"
-            class="modal-input"
-          />
+    <!-- 右侧内容 -->
+    <div class="main">
+      <header class="header">
+        <span>Welcome: {{ currentUser.usrname }} ({{ currentUser.role }})</span>
+        <button @click="logout">Logout</button>
+      </header>
+
+      <div class="content">
+        <!-- 首页 -->
+        <div v-show="activeMenu === 'home'">
+          <h3>首页</h3>
+          <p>登录时间：{{ loginTime }}</p>
         </div>
-        <div class="modal-input-group">
-          <label>New Password</label>
-          <input
-            type="password"
-            v-model="pwdForm.newPassword"
-            placeholder="Enter your new password"
-            class="modal-input"
-          />
+
+        <!-- 个人信息 -->
+        <div v-show="activeMenu === 'profile'">
+          <h3>个人信息</h3>
+          <p>用户名：{{ currentUser.usrname }}</p>
+          <p>角色：{{ currentUser.role }}</p>
+          <p>等级：{{ currentUser.level }}</p>
         </div>
-        <div class="modal-btn-group">
-          <button class="modal-cancel-btn" @click="closePwdModal">Cancel</button>
-          <button class="modal-confirm-btn" @click="handleChangePwd" :disabled="pwdLoading">
-            {{ pwdLoading ? 'Processing...' : 'Confirm' }}
-          </button>
+
+        <!-- 修改密码 -->
+        <div v-show="activeMenu === 'changePwd'">
+          <h3>修改密码</h3>
+          <input type="password" v-model="oldPwd" placeholder="旧密码" />
+          <input type="password" v-model="newPwd" placeholder="新密码" />
+          <button @click="handleChangePwd">确认修改</button>
+        </div>
+
+        <!-- 用户列表 -->
+        <div v-show="activeMenu === 'userList'" v-if="currentUser.level <= 1">
+          <h3>用户列表</h3>
+          <div class="user-item" v-for="u in userList" :key="u.usrname">
+            {{ u.usrname }} · {{ u.role }}
+            <button
+              v-if="currentUser.level === 0"
+              @click="openSetMenu"
+            >
+              设置菜单
+            </button>
+          </div>
+        </div>
+
+        <!-- 菜单权限设置 -->
+        <div v-show="activeMenu === 'menuSetting'">
+          <h3>给用户设置菜单权限</h3>
+          <div v-for="u in userList" :key="u.usrname" class="menu-set-item">
+            <p>{{ u.usrname }}</p>
+            <label>
+              <input type="checkbox" v-model="u._menus" value="home">首页
+            </label>
+            <label>
+              <input type="checkbox" v-model="u._menus" value="profile">个人信息
+            </label>
+            <label>
+              <input type="checkbox" v-model="u._menus" value="userList">用户列表
+            </label>
+            <label>
+              <input type="checkbox" v-model="u._menus" value="changePwd">修改密码
+            </label>
+            <button @click="saveUserMenu(u)">保存</button>
+          </div>
         </div>
       </div>
     </div>
@@ -115,417 +96,164 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import axios from 'axios'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 const router = useRouter()
-const route = useRoute()
-// 登录表单数据
-const loginForm = ref({
-  usrname: '',
-  password: ''
-})
-// 首页用户数据
-const currentUser = ref({})
-const userList = ref([])
+
+const currentUser = ref(JSON.parse(localStorage.getItem('currentUser') || '{}'))
+const token = ref(localStorage.getItem('token'))
 const loginTime = ref(new Date().toLocaleString())
-// 用户名输入框ref（自动聚焦）
-const usernameInput = ref(null)
 
-// 🌟 新增：修改密码弹窗相关响应式数据
-const pwdModalVisible = ref(false) // 弹窗显示隐藏
-const pwdLoading = ref(false) // 提交按钮加载状态
-const pwdForm = ref({ // 密码表单数据
-  oldPassword: '',
-  newPassword: ''
-})
+const menuList = ref([])
+const activeMenu = ref('home')
+const userList = ref([])
 
-// 首字母大写函数
-const capitalize = (str) => {
-  if (!str) return ''
-  return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase()
-}
-// 基础请求配置
+const oldPwd = ref('')
+const newPwd = ref('')
+
 const request = axios.create({
   baseURL: 'http://localhost:8081',
-  timeout: 5000,
-  headers: { 'Content-Type': 'application/json' }
+  headers: { Authorization: `Bearer ${token.value}` }
 })
-// 请求拦截器（添加token）
-request.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-    return config
-  },
-  (error) => Promise.reject(error)
-)
-// 登录逻辑
-const handleLogin = async () => {
-  if (!loginForm.value.usrname || !loginForm.value.password) {
-    alert('Please enter username and password!')
-    return
-  }
+
+const allMenus = ['home', 'profile', 'userList', 'changePwd']
+
+onMounted(async () => {
   try {
-    const res = await request.post('/api/login', loginForm.value)
-    const { token, user } = res.data.data
-    localStorage.setItem('token', token)
-    localStorage.setItem('currentUser', JSON.stringify(user))
-    alert('Login success!')
-    router.push('/home')
-  } catch (err) {
-    alert('Login failed: ' + (err.response?.data?.msg || err.message))
+    await loadMyMenus()
+    if (currentUser.value?.level <= 1) await loadUserList()
+  } catch (e) {
+    console.error("加载失败", e)
   }
+})
+
+// 加载菜单
+async function loadMyMenus() {
+  const res = await request.get('/api/user/menus')
+  const my = res.data.data
+  menuList.value = [
+    { name: 'home', label: '首页' },
+    { name: 'profile', label: '个人信息' },
+    { name: 'userList', label: '用户列表' },
+    { name: 'changePwd', label: '修改密码' }
+  ].filter(m => my.includes(m.name))
 }
-// 首页初始化逻辑
-const initHomePage = async () => {
-  const localUser = localStorage.getItem('currentUser')
-  if (!localUser) {
-    alert('Please login first')
-    router.push('/')
-    return
-  }
-  currentUser.value = JSON.parse(localUser)
-  if (currentUser.value.level <= 1) {
-    await loadUserList()
-  }
+
+// 切换菜单
+function switchMenu(name) {
+  activeMenu.value = name
 }
+
 // 加载用户列表
-const loadUserList = async () => {
+async function loadUserList() {
+  const res = await request.get('/api/users')
+  userList.value = res.data.data.map(u => {
+    try {
+      u._menus = JSON.parse(u.menu_permissions) || allMenus
+    } catch (e) {
+      u._menus = allMenus
+    }
+    return u
+  })
+}
+
+// 打开菜单设置
+function openSetMenu() {
+  activeMenu.value = 'menuSetting'
+}
+
+// 保存用户菜单
+async function saveUserMenu(u) {
   try {
-    const res = await request.get('/api/users')
-    userList.value = res.data.data
-  } catch (err) {
-    alert('Load user list failed: ' + (err.response?.data?.msg || err.message))
+    await request.post('/api/admin/setMenu', {
+      username: u.usrname,
+      menus: u._menus
+    })
+    alert('保存成功')
+  } catch (e) {
+    alert('保存失败')
   }
 }
-// 删除按钮禁用逻辑
-const getDeleteBtnDisabledStatus = (targetUser) => {
-  return targetUser.level < currentUser.value.level || targetUser.usrname === currentUser.value.usrname
-}
-// 删除用户
-const deleteUser = async (username) => {
-  if (!confirm(`Are you sure to delete user: ${username}?`)) return
+
+// 修改密码
+async function handleChangePwd() {
   try {
-    await request.delete(`/api/users/${username}`)
-    alert('Delete success!')
-    await loadUserList()
-  } catch (err) {
-    alert('Delete failed: ' + (err.response?.data?.msg || err.message))
+    await request.put('/api/changePassword', {
+      oldPassword: oldPwd.value,
+      newPassword: newPwd.value
+    })
+    alert('修改成功')
+  } catch (e) {
+    alert(e.response?.data?.msg || '修改失败')
   }
 }
-// 退出登录
-const logout = () => {
-  localStorage.removeItem('token')
-  localStorage.removeItem('currentUser')
+
+// 退出
+function logout() {
+  localStorage.clear()
   router.push('/')
 }
-
-// 🌟 新增：修改密码弹窗相关方法
-// 打开弹窗
-const openPwdModal = () => {
-  pwdModalVisible.value = true
-  // 打开时清空表单
-  pwdForm.value.oldPassword = ''
-  pwdForm.value.newPassword = ''
-}
-// 关闭弹窗
-const closePwdModal = () => {
-  pwdModalVisible.value = false
-}
-// 提交修改密码
-const handleChangePwd = async () => {
-  // 前端校验
-  if (!pwdForm.value.oldPassword || !pwdForm.value.newPassword) {
-    alert('Old password and new password cannot be empty!')
-    return
-  }
-  pwdLoading.value = true
-  try {
-    // 调用后端修改密码接口
-    await request.put('/api/changePassword', pwdForm.value)
-    alert('Password changed successfully!')
-    closePwdModal() // 成功后关闭弹窗
-  } catch (err) {
-    alert('Change failed: ' + (err.response?.data?.msg || err.message))
-  } finally {
-    pwdLoading.value = false // 无论成功失败，关闭加载状态
-  }
-}
-
-// 页面挂载逻辑
-onMounted(() => {
-  if (route.path === '/' && usernameInput.value) {
-    usernameInput.value.focus()
-  }
-  if (route.path === '/home') {
-    initHomePage()
-  }
-})
 </script>
 
 <style scoped>
-/* 原有样式全部保留，下面新增弹窗样式 */
-#app {
-  font-family: Avenir, Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-align: center;
-  color: #2c3e50;
-  margin-top: 60px;
-}
-.login-container {
-  min-height: 100vh;
+.layout {
   display: flex;
-  justify-content: center;
-  align-items: center;
-  background-color: #f5f5f5;
+  height: 100vh;
 }
-.login-card {
-  width: 400px;
-  padding: 40px;
-  background-color: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+.sidebar {
+  width: 220px;
+  background: #2c3e50;
+  color: white;
+  padding: 20px;
 }
-.login-card h2 {
-  text-align: center;
-  margin-bottom: 30px;
-  color: #2c3e50;
-}
-.input-group {
-  margin-bottom: 20px;
-}
-.input-group label {
-  display: block;
-  margin-bottom: 8px;
-  color: #333;
-  font-weight: 500;
-}
-.input-group input {
-  width: 100%;
+.menu-item {
   padding: 12px 16px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  font-size: 16px;
-  box-sizing: border-box;
-}
-.input-group input:focus {
-  outline: none;
-  border-color: #3498db;
-  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
-}
-.login-btn {
-  width: 100%;
-  padding: 12px;
-  background-color: #2c3e50;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  font-size: 16px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-.login-btn:hover {
-  background-color: #34495e;
-}
-.home-container {
-  min-height: 100vh;
-  background-color: #f5f5f5;
-  color: #333;
-  padding-bottom: 40px;
-}
-.header {
-  background-color: #2c3e50;
-  color: white;
-  padding: 20px 40px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.user-info {
-  display: flex;
-  gap: 20px;
-  align-items: center;
-}
-.logout-btn {
-  padding: 8px 16px;
-  background-color: #e74c3c;
-  color: white;
-  border: none;
+  margin: 6px 0;
   border-radius: 6px;
   cursor: pointer;
 }
-.admin-module, .user-module {
-  max-width: 1200px;
-  margin: 40px auto;
-  padding: 0 20px;
-  overflow-x: auto;
+.menu-item:hover {
+  background: #34495e;
 }
-.user-list {
-  margin-top: 20px;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-  min-width: 600px;
+.menu-item.active {
+  background: #3498db;
 }
-.user-item {
-  display: flex;
-  padding: 16px;
-  background-color: white;
-  border-bottom: 1px solid #eee;
-  align-items: center;
-  width: 100%;
+.menu-admin {
+  margin-top: 30px;
+  color: #ffb74d;
+  border: 1px dashed #ffb74d;
 }
-.header-row {
-  background-color: #34495e;
-  color: white;
-  font-weight: bold;
-}
-.col-usrname {
-  flex: 3;
-  min-width: 120px;
-  padding: 0 8px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.col-role {
+.main {
   flex: 1;
-  min-width: 80px;
-  padding: 0 8px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: center;
-}
-.col-level {
-  flex: 0.8;
-  min-width: 60px;
-  padding: 0 8px;
-  text-align: center;
-}
-.col-action {
-  flex: 1.2;
-  min-width: 100px;
-  max-width: 160px;
-  padding: 0 8px;
-  text-align: center;
-}
-.delete-btn {
-  min-width: 80px;
-  max-width: 140px;
-  width: 100%;
-  padding: 6px 8px;
-  background-color: #e74c3c;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  white-space: nowrap;
-  font-size: 13px;
-}
-.delete-btn:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
-}
-.user-dashboard {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 20px;
-  margin-top: 20px;
-}
-.card {
-  background-color: white;
-  padding: 20px;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-}
-.edit-btn {
-  margin-top: 16px;
-  padding: 8px 16px;
-  background-color: #3498db;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-/* 🌟 新增：修改密码弹窗样式 */
-.modal-mask {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.5);
   display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 999;
+  flex-direction: column;
 }
-.modal-content {
-  width: 400px;
-  padding: 30px;
-  background-color: white;
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-}
-.modal-title {
-  text-align: center;
-  margin-bottom: 20px;
-  color: #2c3e50;
-  font-size: 20px;
-}
-.modal-input-group {
-  margin-bottom: 16px;
-}
-.modal-input-group label {
-  display: block;
-  margin-bottom: 6px;
-  color: #333;
-  font-weight: 500;
-}
-.modal-input {
-  width: 100%;
-  padding: 12px 14px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  font-size: 16px;
-  box-sizing: border-box;
-}
-.modal-input:focus {
-  outline: none;
-  border-color: #3498db;
-  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
-}
-.modal-btn-group {
+.header {
+  background: #ecf0f1;
+  padding: 16px 24px;
   display: flex;
-  gap: 12px;
-  margin-top: 20px;
+  justify-content: space-between;
 }
-.modal-cancel-btn {
+.content {
+  padding: 24px;
+  background: #f8f9fa;
   flex: 1;
-  padding: 10px;
-  background-color: #95a5a6;
+}
+.user-item, .menu-set-item {
+  background: white;
+  padding: 12px;
+  margin: 8px 0;
+  border-radius: 8px;
+}
+input {
+  margin: 6px;
+  padding: 8px;
+}
+button {
+  padding: 6px 12px;
+  background: #3498db;
   color: white;
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 16px;
-}
-.modal-confirm-btn {
-  flex: 1;
-  padding: 10px;
-  background-color: #3498db;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 16px;
-}
-.modal-confirm-btn:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
 }
 </style>

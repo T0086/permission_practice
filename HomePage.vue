@@ -49,10 +49,10 @@
             {{ u.usrname }}
             <button @click="editUserMenu(u)">设置菜单</button>
             <!-- 在用户列表项中添加删除按钮 -->
-<button
-  @click="deleteUser(u)"
-  :disabled="!canDeleteUser(u)"
->删除</button>
+            <button
+              @click="deleteUser(u)"
+              :disabled="!canDeleteUser(u)"
+            >删除</button>
           </div>
         </div>
 
@@ -125,7 +125,8 @@ import { MENU_CONFIG} from '@/utils/menuConfig'
 
 const router = useRouter()
 const currentUser = ref(JSON.parse(localStorage.getItem('currentUser')))
-const token = ref(localStorage.getItem('token'))
+const accessToken = ref(localStorage.getItem('accessToken')) // 短token
+const refreshToken = ref(localStorage.getItem('refreshToken')) // 长token
 const activeMenu = ref('home')
 const userList = ref([])
 const userMenus = ref([])
@@ -133,20 +134,52 @@ const userMenus = ref([])
 const oldPwd = ref('')
 const newPwd = ref('')
 
+// ===================== 核心：创建带Token自动刷新的axios实例 =====================
 const request = axios.create({
   baseURL: 'http://localhost:8081',
-  headers: { Authorization: `Bearer ${token.value}` }
+  headers: { Authorization: `Bearer ${accessToken.value}` }
 })
+
+// 请求拦截器：Token过期自动刷新
+request.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config
+    // 排除刷新token接口本身的错误，避免死循环
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true
+      try {
+        // 用刷新令牌获取新的访问令牌
+        const res = await axios.post('http://localhost:8081/api/refreshToken', {
+          refreshToken: refreshToken.value
+        })
+        const newAccessToken = res.data.data.accessToken
+        // 更新本地token
+        accessToken.value = newAccessToken
+        localStorage.setItem('accessToken', newAccessToken)
+        // 更新请求头并重试原请求
+        originalRequest.headers.Authorization = `Bearer ${newAccessToken}`
+        return request(originalRequest)
+      } catch (refreshError) {
+        // 刷新令牌也失效，强制退出登录
+        alert('登录已过期，请重新登录')
+        localStorage.clear()
+        router.push('/')
+        return Promise.reject(refreshError)
+      }
+    }
+    return Promise.reject(error)
+  }
+)
 
 // 初始化加载菜单
 onMounted(async () => {
   await loadUserOwnMenus()
-  // 🔴 防止currentUser.value为undefined导致报错
+  // 防止currentUser.value为undefined导致报错
   if (currentUser.value && currentUser.value.level <= 1) {
     await loadAllUsers()
   }
 })
-
 
 // 加载当前用户菜单（加try/catch兜底）
 async function loadUserOwnMenus() {
@@ -165,6 +198,7 @@ async function loadUserOwnMenus() {
     ];
   }
 }
+
 // 判断是否能删除该用户
 function canDeleteUser(targetUser) {
   // 不能删除自己
@@ -190,7 +224,7 @@ async function loadAllUsers() {
   const res = await request.get('/api/users')
   userList.value = res.data.data.map(u => {
     try {
-      // 🔴 重点：数据库字段是menu_permission（单数），不是menu_permissions
+      // 重点：数据库字段是menu_permission（单数），不是menu_permissions
       const menuNames = JSON.parse(u.menu_permission) || []; 
       // 核心转换：name数组→编号数组（如["home"]→[1]），用于勾选框回显
       u.editMenuIds = Object.keys(MENU_CONFIG)
@@ -254,10 +288,18 @@ async function handleChangePwd() {
   }
 }
 
-// 退出登录
-function logout() {
-  localStorage.clear()
-  router.push('/')
+// 退出登录（调用后端接口清除刷新令牌）
+async function logout() {
+  try {
+    await axios.post('http://localhost:8081/api/logout', {
+      username: currentUser.value.usrname
+    })
+  } catch (e) {
+    console.error('退出登录失败:', e)
+  } finally {
+    localStorage.clear()
+    router.push('/')
+  }
 }
 </script>
 

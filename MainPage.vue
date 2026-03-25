@@ -62,7 +62,7 @@ const tip = ref('')
 const color = ref('red')
 const loading = ref(false)
 
-// 基础请求配置（直接用axios，避免request.js配置问题）
+// 基础请求配置
 const request = axios.create({
   baseURL: 'http://localhost:8081',
   timeout: 5000,
@@ -125,7 +125,7 @@ const SignupAction = async () => {
   }
 }
 
-// 3. 登录逻辑
+// 3. 登录逻辑（核心：保存长短Token）
 const LoginAction = async () => {
   const username = usrname.value.trim()
   if (!username || !password.value) {
@@ -138,9 +138,11 @@ const LoginAction = async () => {
       usrname: username,
       password: password.value
     })
-    // 保存token和用户信息
-    localStorage.setItem('token', res.data.data.token)
+    // 保存长短Token和用户信息到本地存储
+    localStorage.setItem('accessToken', res.data.data.accessToken)   // 短Token
+    localStorage.setItem('refreshToken', res.data.data.refreshToken) // 长Token
     localStorage.setItem('currentUser', JSON.stringify(res.data.data.user))
+    
     alert('Login success!')
     router.push('/home')
   } catch (err) {

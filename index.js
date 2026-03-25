@@ -2,35 +2,30 @@ const express = require('express')
 const jwt = require('jsonwebtoken')
 const cors = require('cors')
 const bcrypt = require('bcrypt')
-const mysql = require('mysql2/promise')
+const Redis = require('ioredis')
 
 const app = express()
 
-// 数据库连接配置
-const dbConfig = {
+// Redis 连接配置
+const redisConfig = {
   host: 'localhost',
-  port: 3306,
-  user: 'root',
-  password: '123456',
-  database: 'user_manage_sys',
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
+  port: 6379,
+  password: '',
+  db: 0,
+  keyPrefix: 'user_manage:'
 }
 
-// 创建连接池
-const pool = mysql.createPool(dbConfig)
+// 创建 Redis 客户端
+const redisClient = new Redis(redisConfig)
 
-// 测试数据库连接
-;(async () => {
-  try {
-    const conn = await pool.getConnection()
-    console.log('✅ MySQL数据库连接成功！')
-    conn.release()
-  } catch (err) {
-    console.error('❌ MySQL连接失败：', err.message)
+// 测试 Redis 连接
+redisClient.ping((err, pong) => {
+  if (err) {
+    console.error('❌ Redis 连接失败：', err.message)
+    return
   }
-})()
+  console.log('✅ Redis 连接成功！', pong)
+})
 
 // 中间件
 app.use(cors())
@@ -69,9 +64,10 @@ function checkPermission(minLevel) {
 app.get('/api/checkUsername', async (req, res) => {
   const { usrname } = req.query
   if (!usrname) return res.status(400).json({ msg: '用户名不能为空' })
+  const username = usrname.trim()
   try {
-    const [rows] = await pool.execute('SELECT usrname FROM users WHERE usrname = ?', [usrname.trim()])
-    if (rows.length > 0) return res.status(400).json({ msg: '用户名已存在' })
+    const exists = await redisClient.sismember('all:usernames', username)
+    if (exists) return res.status(400).json({ msg: '用户名已存在' })
     res.json({ msg: '用户名可用' })
   } catch (err) {
     console.error('检查用户名失败:', err)
@@ -80,7 +76,6 @@ app.get('/api/checkUsername', async (req, res) => {
 })
 
 // 2. 注册
-// 注册接口（修复版）
 app.post('/api/register', async (req, res) => {
   const { usrname, password, role } = req.body
   if (!usrname || !password || !role) return res.status(400).json({ msg: '不能为空' })
@@ -88,24 +83,24 @@ app.post('/api/register', async (req, res) => {
   if (!ROLE_LEVEL_MAP.hasOwnProperty(roleLower)) {
     return res.status(400).json({ msg: '角色只能是 admin/worker/customer' })
   }
+  const username = usrname.trim()
   try {
-    const [exist] = await pool.execute('SELECT usrname FROM users WHERE usrname = ?', [usrname.trim()])
-    if (exist.length) return res.status(400).json({ msg: '用户名已存在' })
+    const exists = await redisClient.sismember('all:usernames', username)
+    if (exists) return res.status(400).json({ msg: '用户名已存在' })
+    
     const hashPwd = await bcrypt.hash(password, saltRounds)
-    // ✅ 关键修复：加入 menu_permission 字段，给默认菜单
-    await pool.execute(
-      'INSERT INTO users (usrname, password, role, level, menu_permission) VALUES (?, ?, ?, ?, ?)',
-      [
-        usrname.trim(),
-        hashPwd,
-        roleLower,
-        ROLE_LEVEL_MAP[roleLower],
-        '["home","profile","changePwd"]' // 默认菜单
-      ]
+    await redisClient.hmset(
+      `user:${username}`,
+      'password', hashPwd,
+      'role', roleLower,
+      'level', ROLE_LEVEL_MAP[roleLower],
+      'menu_permission', JSON.stringify(['home','profile','changePwd'])
     )
+    await redisClient.sadd('all:usernames', username)
+    
     res.json({ code: 200, msg: '注册成功' })
   } catch (err) {
-    console.error('注册失败:', err) // 看后端终端日志，定位具体错误
+    console.error('注册失败:', err)
     res.status(500).json({ msg: '服务器错误：' + err.message })
   }
 })
@@ -114,20 +109,25 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   const { usrname, password } = req.body
   if (!usrname || !password) return res.status(400).json({ msg: '不能为空' })
+  const username = usrname.trim()
   try {
-    const [userList] = await pool.execute('SELECT * FROM users WHERE usrname = ?', [usrname.trim()])
-    if (!userList.length) return res.status(400).json({ msg: '用户不存在' })
-    const user = userList[0]
+    const user = await redisClient.hgetall(`user:${username}`)
+    if (Object.keys(user).length === 0) return res.status(400).json({ msg: '用户不存在' })
+    
     const valid = await bcrypt.compare(password, user.password)
     if (!valid) return res.status(400).json({ msg: '密码错误' })
+    
     const token = jwt.sign(
-      { usrname: user.usrname, role: user.role, level: user.level },
+      { usrname: username, role: user.role, level: parseInt(user.level) },
       SECRET_KEY,
       { expiresIn: '2h' }
     )
     res.json({
       code: 200,
-      data: { token, user: { usrname: user.usrname, role: user.role, level: user.level } }
+      data: { 
+        token, 
+        user: { usrname: username, role: user.role, level: parseInt(user.level) } 
+      }
     })
   } catch (err) {
     res.status(500).json({ msg: '服务器错误' })
@@ -142,101 +142,91 @@ app.get('/api/profile', checkPermission(2), (req, res) => {
 // 5. 用户列表
 app.get('/api/users', checkPermission(1), async (req, res) => {
   try {
-    const [list] = await pool.execute('SELECT usrname, role, level, menu_permission FROM users')
-    res.json({ code: 200, data: list })
+    const usernames = await redisClient.smembers('all:usernames')
+    const userList = await Promise.all(
+      usernames.map(async (username) => {
+        const user = await redisClient.hgetall(`user:${username}`)
+        return {
+          usrname: username,
+          role: user.role,
+          level: parseInt(user.level),
+          menu_permission: user.menu_permission
+        }
+      })
+    )
+    res.json({ code: 200, data: userList })
   } catch (err) {
     res.status(500).json({ msg: '服务器错误' })
   }
 })
 
-// ====================== ✅ 修正菜单接口（前端匹配）======================
+// 6. 获取用户菜单
 app.get('/api/user/menus', checkPermission(2), async (req, res) => {
   try {
-    const usrname = req.user?.usrname
-    if (!usrname) {
+    const username = req.user?.usrname
+    if (!username) {
       return res.status(401).json({ msg: '用户信息无效' })
     }
-
-    const [rows] = await pool.execute(
-      'SELECT menu_permission FROM users WHERE usrname = ?',
-      [usrname]
-    )
-
-    if (rows.length === 0) {
-      return res.status(400).json({ msg: '用户不存在' })
-    }
-
-    let menus = rows[0].menu_permission
+    const menuPermission = await redisClient.hget(`user:${username}`, 'menu_permission')
     let menuArray = []
-
-    if (menus) {
+    if (menuPermission) {
       try {
-        menuArray = JSON.parse(menus)
+        menuArray = JSON.parse(menuPermission)
       } catch (parseErr) {
-        // 如果解析失败，用默认菜单兜底
         menuArray = ['home', 'profile', 'changePwd']
       }
     } else {
-      // 空值用默认菜单
       menuArray = ['home', 'profile', 'changePwd']
     }
-
     res.json({ code: 200, data: menuArray })
   } catch (err) {
-    console.error('获取菜单失败:', err) // 后端打印错误，方便排查
+    console.error('获取菜单失败:', err)
     res.status(500).json({ msg: '服务器错误：' + err.message })
   }
 })
 
-// ====================== ✅ 修正设置菜单接口（前端匹配）======================
-// 替换原来的 /api/admin/setMenu 接口
+// 7. 设置菜单权限
 app.post('/api/admin/setMenu', checkPermission(0), async (req, res) => {
-  const { username, menus } = req.body; // menus是前端传的编号数组[1,2,4]
+  const { username, menus } = req.body;
   try {
-    // 核心：编号数组转name数组（和MENU_CONFIG匹配）
     const menuNameMap = {
       1: 'home',
       2: 'profile',
       3: 'userList',
       4: 'changePwd'
     };
-    const menuNames = menus.map(num => menuNameMap[num]).filter(Boolean); // 转成["home","profile"]
-    
-    await pool.execute(
-      'UPDATE users SET menu_permission = ? WHERE usrname = ?',
-      [JSON.stringify(menuNames), username] // 存name数组，和注册默认值格式一致
-    );
+    const menuNames = menus.map(num => menuNameMap[num]).filter(Boolean);
+    await redisClient.hset(`user:${username}`, 'menu_permission', JSON.stringify(menuNames))
     res.json({ code: 200, msg: '保存成功' });
   } catch (e) {
     console.error('保存菜单失败：', e);
     res.status(500).json({ msg: '保存失败' });
   }
 });
-// ======================================================================
 
-// 6. 删除用户
+// 8. 删除用户
 app.delete('/api/users/:usrname', checkPermission(1), async (req, res) => {
   const { usrname } = req.params
   const currentUser = req.user
+  const username = usrname.trim()
 
   try {
-    // 1. 查询目标用户
-    const [targetList] = await pool.execute('SELECT level FROM users WHERE usrname = ?', [usrname])
-    if (targetList.length === 0) {
+    const user = await redisClient.hgetall(`user:${username}`)
+    if (Object.keys(user).length === 0) {
       return res.status(400).json({ msg: '用户不存在' })
     }
-    const targetLevel = targetList[0].level
+    const targetLevel = parseInt(user.level)
 
-    // 2. 权限校验
-    if (usrname === currentUser.usrname) {
+    if (username === currentUser.usrname) {
       return res.status(400).json({ msg: '不能删除自己' })
     }
     if (targetLevel <= currentUser.level) {
       return res.status(403).json({ msg: '不能删除权限等级不低于自己的用户' })
     }
 
-    // 3. 执行删除
-    await pool.execute('DELETE FROM users WHERE usrname = ?', [usrname])
+    await redisClient.del(`user:${username}`)
+    await redisClient.srem('all:usernames', username)
+
     res.json({ code: 200, msg: '删除成功' })
   } catch (err) {
     console.error('删除用户失败:', err)
@@ -244,18 +234,21 @@ app.delete('/api/users/:usrname', checkPermission(1), async (req, res) => {
   }
 })
 
-// 修改密码
+// 9. 修改密码
 app.put('/api/changePassword', checkPermission(2), async (req, res) => {
   const { oldPassword, newPassword } = req.body
   const user = req.user
   if (!oldPassword || !newPassword) return res.status(400).json({ msg: '不能为空' })
   try {
-    const [rows] = await pool.execute('SELECT password FROM users WHERE usrname = ?', [user.usrname])
-    if (!rows.length) return res.status(400).json({ msg: '用户不存在' })
-    const valid = await bcrypt.compare(oldPassword, rows[0].password)
+    const oldPwdHash = await redisClient.hget(`user:${user.usrname}`, 'password')
+    if (!oldPwdHash) return res.status(400).json({ msg: '用户不存在' })
+    
+    const valid = await bcrypt.compare(oldPassword, oldPwdHash)
     if (!valid) return res.status(400).json({ msg: '旧密码错误' })
+    
     const newHash = await bcrypt.hash(newPassword, saltRounds)
-    await pool.execute('UPDATE users SET password = ? WHERE usrname = ?', [newHash, user.usrname])
+    await redisClient.hset(`user:${user.usrname}`, 'password', newHash)
+    
     res.json({ code: 200, msg: '修改成功' })
   } catch (err) {
     res.status(500).json({ msg: '服务器错误' })
